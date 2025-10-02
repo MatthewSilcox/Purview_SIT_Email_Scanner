@@ -48,7 +48,7 @@ $clientSecret = "<YOUR CLIENT SECRET>"
 - Each match includes a snippet of matching context from the email body
 
 ```powershell
-.\SSN_Email_Scanner.ps1
+.\Invoke-EmailSITSearch.ps1
 ```
 
 ### 2. Review CSV Results
@@ -60,7 +60,7 @@ $clientSecret = "<YOUR CLIENT SECRET>"
 - Use the deletion script to selectively or automatically delete matched emails
 
 ```powershell
-Remove-EmailsFromCsvReport -ReviewedCsvPath '.\SSN_Email_Report_20250418-113000.csv'
+Invoke-EmailSSNDeletion -ReviewedCsvPath '.\SSN_Email_Report_20250418-113000.csv'
 ```
 
 ---
