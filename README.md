@@ -1,7 +1,7 @@
 # SSN_Email_Scanner
 
 ## Overview
-This PowerShell script scans Exchange Online user mailboxes for U.S. Social Security Numbers (SSNs) using the Microsoft Graph API. It applies confidence scoring based on contextual keyword proximity and regex patterns, exports results to a CSV for review, and provides optional deletion capabilities.
+This PowerShell script scans Exchange Online user mailboxes for sensitive information using the Microsoft Graph API. It applies confidence scoring based on contextual keyword proximity and regex patterns, exports results to a CSV for review, and provides optional deletion capabilities.
 
 ## Features
 - Uses Microsoft Graph API with app-only (client credential) authentication
@@ -65,3 +65,4 @@ Invoke-EmailSSNDeletion -ReviewedCsvPath '.\SSN_Email_Report_20250418-113000.csv
 
 ---
 Use responsibly, WITH EXTREME CAUTION, and only within environments where you are authorized to perform mailbox searches and deletions. Align with legal and compliance requirements at all times.
+
