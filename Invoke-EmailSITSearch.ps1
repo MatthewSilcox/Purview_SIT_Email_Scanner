@@ -51,7 +51,10 @@ if (-not (Get-Module -Name Microsoft.Graph)) {
     Write-Output "Microsoft.Graph module already imported."
 }
 
-$MaximumFunctionCount = 9999
+# Tenant and App Registration Details
+$tenantId     = ""
+$clientId     = ""
+$clientSecret = ""
 
 $tenantId     = ""
 $clientId     = ""
@@ -61,58 +64,141 @@ $clientCredential   = New-Object System.Management.Automation.PSCredential($clie
 Write-Output "Establishing connection to MS Graph..."
 Connect-MgGraph -TenantId $tenantId -ClientSecretCredential $clientCredential
 
-# PII & Fin Defs
-$ssnPatterns = @{ High='\b\d{3}-\d{2}-\d{4}\b'; Medium='\b\d{9}\b'; Low='\b\d{3}[\s-.]?\d{2}[\s-.]?\d{4}\b' }
-$ssnKeywords = @('SSA Number','social security number','social security #','social security#','social security no','Social Security#','Soc Sec','SSN','SSNS','SSN#','SS#','SSID')
 
-$ccnPatterns = @{ High='\b(?:\d[ -]*?){16}\b'; Medium='\b\d{13,19}\b'; Low='\b\d{13,19}\b' }
-$ccnKeywords = @('credit card','ccn','card number','visa','mastercard','amex','discover','expiration','cvv','cvc','card verification')
+# DATA TYPE DEFINITIONS
 
-$bankAccountPatterns = @{ High='\b\d{9}\b'; Medium='\b\d{8,17}\b'; Low='\b\d{8,17}\b' }
-$bankAccountKeywords = @('bank account','account number','routing number','aba','checking','savings','acct #')
+# 1. SSN Patterns
+$ssnPatterns = @{
+    High   = '\b\d{3}-\d{2}-\d{4}\b'
+    Medium = '\b\d{9}\b'
+    Low    = '\b\d{3}[\s-.]?\d{2}[\s-.]?\d{4}\b' # Generic pattern for context matching
+}
+$ssnKeywords = @(
+    "SSA Number", "social security number", "social security #", "social security#",
+    "social security no", "Social Security#", "Soc Sec", "SSN", "SSNS", "SSN#", "SS#", "SSID"
+)
 
-#Credential & Secret defs
-$genericSecretKeywords = @('secret','token','key','credential','password','pw','passwd','authorization','bearer','sas','subscription','client id','clientid','client secret','connectionstring','userpass')
-$githubPatPatterns = @{ High='gh[pousr]_[A-Za-z0-9]{36}'; Medium='gh\w*_[A-Za-z0-9]{20,}'; Low='gh\w+_[A-Za-z0-9]+' }
-$githubPatKeywords  = @('github','pat') + $genericSecretKeywords
-$googleApiPatterns  = @{ High='AIza[0-9A-Za-z\-_]{35}'; Medium='AIza[0-9A-Za-z\-_]{20,}'; Low='AIza[0-9A-Za-z\-_]+' }
-$googleApiKeywords  = @('google','api') + $genericSecretKeywords
-$slackTokenPatterns = @{ High='xox[baprs]-[0-9A-Za-z-]{10,48}'; Medium='xox\w-[0-9A-Za-z-]{8,}'; Low='xox\w-' }
-$slackTokenKeywords = @('slack') + $genericSecretKeywords
-$azureSasPatterns   = @{ High='sv=\d{4}-\d{2}-\d{2}.*?&sr=[bfqtco].*?&sig=[A-Za-z0-9%+/=]{20,}'; Medium='sig=[A-Za-z0-9%+/=]{20,}'; Low='sv=\d{4}-\d{2}-\d{2}.*sig=' }
-$azureSasKeywords   = @('sas','storage','azure','blob','file','queue','table') + $genericSecretKeywords
-$azureStorageKeyPatterns = @{ High='(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{86}==(?![A-Za-z0-9+/=])'; Medium='[A-Za-z0-9+/]{40,}={0,2}'; Low='[A-Za-z0-9+/]{20,}' }
-$azureStorageKeyKeywords = @('azure','storage','account key') + $genericSecretKeywords
-$jwtAuthPatterns = @{ High='Authorization:\s*Bearer\s+eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+'; Medium='eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+'; Low='Authorization:\s*Bearer\s+' }
-$jwtAuthKeywords = @('authorization','bearer','jwt','token') + $genericSecretKeywords
-$azureSqlConnPatterns = @{ High='Server=.*\\.database\\.windows\\.net;.*User\s*ID=.*;.*Password=.*;'; Medium='Server=.*\\.database\\.windows\\.net;.*Password='; Low='database\\.windows\\.net;' }
-$azureSqlConnKeywords = @('connection','sql','azure','connstr','connection string','db') + $genericSecretKeywords
-$genericSecretPatterns = @{ High='(client[_\- ]?secret|api[_\- ]?key|subscription[_\- ]?key)\s*[:=]\s*["'']?[A-Za-z0-9_\-\.]{16,}["'']?'; Medium='(secret|token|key)\s*[:=]\s*["'']?[A-Za-z0-9_\-\.]{12,}["'']?'; Low='(secret|token|key)\s*[:=]\s*["'']' }
-$generalPasswordKeywords = @('certutil','curl','powershell','ps1','-u','--env','signtool','winexe','net','rclone','autologon','ldifde','password','passwd','pw','userpass','connectionstring','key','credential','token','sas','securestring','sharedaccesskey','accountkey','dapi')
-$generalPasswordPatterns = @{ High=@('(?i)\b(password|passwd|pwd|pw|userpass)\b\s*[:=]\s*["'']?[^\s"'']{8,}["'']?','(?i)\b(-p|--password)\b\s*[:=]?\s*["'']?[^\s"'']{6,}["'']?','(?i)<\s*password\s*>[^<]{6,}<\s*/\s*password\s*>','(?i)\bPassword\s*=\s*[^;"'']{6,};'); Medium=@('(?i)\b(PASSWORD|PASS|PWD|SECRET|TOKEN|KEY)[A-Z0-9_\-]*\s*=\s*["'']?[^\s"'']{8,}["'']?','(?i)<add\s+key=\s*"[^"]*(password|pwd|userpass)[^"]*"\s+value=\s*"[^"]{6,}"\s*/?>','(?i)[A-Za-z0-9+/]{43}={1}','(?i)[A-Za-z0-9+/]{86}==','(?i)[A-Fa-f0-9]{32}'); Low=@('(?i)\b(password|passwd|pwd|pw)\b\s*[:=]\s*[^\s]+') }
+# 2. Credit Card Number (CCN) Patterns
+$ccnPatterns = @{
+    High   = '\b(?:\d[ -]*?){16}\b'         # Formatted 16-digit cards
+    Medium = '\b\d{13,19}\b'               # Any valid length card number, unformatted
+    Low    = '\b\d{13,19}\b'               # Low confidence is an unformatted number WITHOUT a keyword
+}
+$ccnKeywords = @(
+    "credit card", "ccn", "card number", "visa", "mastercard", "amex", "discover",
+    "expiration", "cvv", "cvc", "card verification"
+)
 
-# Helpers
-function Remove-HtmlTags { param([string]$html) ([regex]::Replace($html,'<[^>]*>',' ')) }
-function Normalize-EmailText { param([string]$s) if([string]::IsNullOrWhiteSpace($s)){ return $s }; $s = $s -replace '\u00A0',' '; $s = $s -replace '[\u2010-\u2015]','-'; $s = $s -replace '\u2212','-'; return $s }
+# 3. US Bank Account Patterns
+$bankAccountPatterns = @{
+    High   = '\b\d{9}\b'       # Routing number is a strong indicator
+    Medium = '\b\d{8,17}\b'    # Common account number length
+    Low    = '\b\d{8,17}\b'    # Generic pattern for context matching
+}
+$bankAccountKeywords = @(
+    "bank account", "account number", "routing number", "aba", "checking", "savings", "acct #"
+)
 
-function Get-MatchContext { param([string]$text,[object]$pattern,[int]$contextLength=150) $contexts=@(); $patternList=@(); if($pattern -is [array]){ $patternList=$pattern } else { $patternList=@($pattern) } foreach($rx in $patternList){ $ms=[regex]::Matches($text,$rx); foreach($m in $ms){ $s=[Math]::Max(0,$m.Index-$contextLength); $l=[Math]::Min($contextLength*2+$m.Length,$text.Length-$s); $contexts+= $text.Substring($s,$l).Replace("`r",'').Replace("`n",' ') } } return $contexts -join "`n---`n" }
-
-function Test-KeywordProximity { param([string]$text,[System.Text.RegularExpressions.Match]$match,[string[]]$keywords,[int]$window=150) $s=[Math]::Max(0,$match.Index-$window); $l=[Math]::Min($window*2+$match.Length,$text.Length-$s); $slice = $text.Substring($s,$l); foreach($k in $keywords){ if([string]::IsNullOrWhiteSpace($k)){ continue } $rx = "(?i)(?<!\\w)"+[regex]::Escape($k.Trim())+"(?!\\w)"; if($slice -match $rx){ return $true } } return $false }
-
-# PII matcher with proximity
-function Find-PIIMatches { param([string]$text,[string]$dataType,[array]$keywords,[hashtable]$patterns)
-  $text = Normalize-EmailText $text
-  if($patterns.High){ $m=[regex]::Match($text,$patterns.High); if($m.Success -and (Test-KeywordProximity -text $text -match $m -keywords $keywords)){ return [pscustomobject]@{ DataType=$dataType; Confidence='High'; MatchedPattern=$patterns.High; ContextPattern=$patterns.High } } }
-  if($patterns.Medium){ $m2=[regex]::Match($text,$patterns.Medium); if($m2.Success -and (Test-KeywordProximity -text $text -match $m2 -keywords $keywords)){ return [pscustomobject]@{ DataType=$dataType; Confidence='Medium'; MatchedPattern=$patterns.Medium; ContextPattern=$patterns.Medium } } }
-  if($patterns.Low -and ($text -match $patterns.Low)){ return [pscustomobject]@{ DataType=$dataType; Confidence='Low'; MatchedPattern=$patterns.Low; ContextPattern=$patterns.Low } }
-  return $null }
-
-# Credential & secret matcher
-function Find-CredentialMatches { param([string]$text,[string]$dataType,[array]$keywords,[hashtable]$patterns) $kw=$false; foreach($k in $keywords){ if([string]::IsNullOrWhiteSpace($k)){continue}; $rx = "(?i)(?<!\\w)"+[regex]::Escape($k.Trim())+"(?!\\w)"; if($text -match $rx){ $kw=$true; break } } $level=$null; $used=$null; if($patterns.ContainsKey('High') -and ($text -match $patterns.High)){ $level='High'; $used=$patterns.High } elseif($patterns.ContainsKey('Medium') -and ($text -match $patterns.Medium)){ $level='Medium'; $used=$patterns.Medium } elseif($patterns.ContainsKey('Low') -and ($text -match $patterns.Low)){ $level='Low'; $used=$patterns.Low } else { return $null } if($level -eq 'High' -and -not $kw){ $level='Medium' } elseif($level -eq 'Medium' -and $kw){ $level='High' } return [pscustomobject]@{ DataType=$dataType; Confidence=$level; MatchedPattern=$used; ContextPattern=$used } }
+# DATA TYPE DEFINITIONS
 
 
-# Main loop
-Write-Output 'Gathering user mailboxes...'
+# HELPER FUNCTIONS
+function Remove-HtmlTags {
+    param ([string]$html)
+    return ([regex]::Replace($html, '<[^>]*>', ' '))
+}
+
+function Get-MatchContext {
+    param (
+        [string]$text,
+        [string]$pattern,
+        [int]$contextLength = 150
+    )
+    $matches = [regex]::Matches($text, $pattern)
+    $contexts = @()
+    foreach ($match in $matches) {
+        $start = [Math]::Max(0, $match.Index - $contextLength)
+        $length = [Math]::Min($contextLength * 2 + $match.Length, $text.Length - $start)
+        $contexts += $text.Substring($start, $length).Replace("`r", "").Replace("`n", " ")
+    }
+    return $contexts -join "`n---`n"
+}
+
+# CLASSIFICATION FUNCTION
+function Find-SensitiveDataMatches {
+    param (
+        [string]$text,
+        [string]$dataType,
+        [array]$keywords,
+        [hashtable]$patterns
+    )
+    
+    $foundMatch = $null
+    
+    # Check for High/Medium confidence (requires keywords)
+    $keywordFound = $false
+    foreach ($keyword in $keywords) {
+        if ($text -match "(?i)\b$keyword\b") {
+            $keywordFound = $true
+            break
+        }
+    }
+
+    if ($keywordFound) {
+        # Special, more precise logic for Bank Accounts
+        if ($dataType -eq "Bank Account") {
+            $hasRoutingPattern = $text -match $patterns.High
+            $hasAccountPattern = $text -match $patterns.Medium
+
+            if ($hasRoutingPattern -and $hasAccountPattern) {
+                # If BOTH are found with a keyword, it's High Confidence.
+                $foundMatch = @{ Confidence = "High"; MatchedPattern = $patterns.High }
+            } elseif ($hasRoutingPattern -or $hasAccountPattern) {
+                # If EITHER is found with a keyword, it's Medium Confidence.
+                $matchedPattern = if ($hasRoutingPattern) { $patterns.High } else { $patterns.Medium }
+                $foundMatch = @{ Confidence = "Medium"; MatchedPattern = $matchedPattern }
+            }
+        }
+        # Original logic for SSN
+        else {
+            if ($text -match $patterns.High) {
+                $foundMatch = @{ Confidence = "High"; MatchedPattern = $patterns.High }
+            } elseif ($text -match $patterns.Medium) {
+                $foundMatch = @{ Confidence = "Medium"; MatchedPattern = $patterns.Medium }
+            }
+        }
+    }
+    
+    # Check for Low confidence (pattern only, no keyword)
+    if (-not $foundMatch) {
+        if ($dataType -eq "Bank Account") {
+            # Low confidence for banks is finding either pattern without a keyword
+            if ($text -match $patterns.High -or $text -match $patterns.Medium) {
+                $foundMatch = @{ Confidence = "Low"; MatchedPattern = $patterns.Low }
+            }
+        } else {
+            # Original Low confidence for SSN/CCN
+            if ($text -match $patterns.Low) {
+                $foundMatch = @{ Confidence = "Low"; MatchedPattern = $patterns.Low }
+            }
+        }
+    }
+    
+    # If any match was found, prepare and return the result object
+    if ($foundMatch) {
+        $foundMatch.DataType = $dataType
+        $foundMatch.ContextPattern = $foundMatch.MatchedPattern 
+        return [PSCustomObject]$foundMatch
+    }
+    
+    return $null
+}
+
+
+# MAIN PROCESSING LOGIC
+
+# Collect results
+Write-Output "Gathering user mailboxes..."
 $users = Get-MgUser -All | Where-Object { $_.Mail -ne $null }
 $results=@()
 
@@ -131,29 +217,60 @@ $sensitiveDataTypes = @(
   @{ DataType='General Password';           Keywords=$generalPasswordKeywords;   Patterns=$generalPasswordPatterns;    Fn='Cred' }
 )
 
-foreach($user in $users){
-  Write-Host "Scanning mailbox:" $user.Mail -ForegroundColor Cyan
-  try { $messages = Get-MgUserMessage -UserId $user.Id -Top 1000 -Select 'id,subject,sentDateTime,from' } catch { Write-Warning "Failed to retrieve messages for $($user.Mail): $_"; continue }
+# Define all the sensitive data types to search for
+$sensitiveDataTypes = @(
+    @{ DataType = "SSN"; Keywords = $ssnKeywords; Patterns = $ssnPatterns }
+    @{ DataType = "Credit Card"; Keywords = $ccnKeywords; Patterns = $ccnPatterns }
+    @{ DataType = "Bank Account"; Keywords = $bankAccountKeywords; Patterns = $bankAccountPatterns }
+)
 
-  foreach($msg in $messages){
-    try { $fullMessage = Get-MgUserMessage -UserId $user.Id -MessageId $msg.Id; $bodyContent = Remove-HtmlTags $fullMessage.Body.Content; $bodyContent = Normalize-EmailText $bodyContent } catch { Write-Warning "Failed to retrieve full content for message ID $($msg.Id) in $($user.Mail): $_"; continue }
-
-    foreach($type in $sensitiveDataTypes){
-      $match = if($type.Fn -eq 'PII'){ Find-PIIMatches -text $bodyContent -dataType $type.DataType -keywords $type.Keywords -patterns $type.Patterns } else { Find-CredentialMatches -text $bodyContent -dataType $type.DataType -keywords $type.Keywords -patterns $type.Patterns }
-      if($match){
-        $ctx = Get-MatchContext -text $bodyContent -pattern $match.ContextPattern
-        Write-Host "Match found:" $msg.Subject "- Type:" $match.DataType "- Confidence:" $match.Confidence -ForegroundColor Green
-        $results += [pscustomobject]@{ Mailbox=$user.Mail; UserId=$user.Id; Subject=$msg.Subject; DataType=$match.DataType; Confidence=$match.Confidence; From=$msg.From.EmailAddress.Address; SentDateTime=$msg.SentDateTime; MessageId=$msg.Id; MatchPreview=$ctx }
-        break
-      }
+foreach ($user in $users) {
+    Write-Host "Scanning mailbox:" $user.Mail -ForegroundColor Cyan
+    try {
+        $messages = Get-MgUserMessage -UserId $user.Id -Top 1000 -Select "id,subject,sentDateTime,from"
+    } catch {
+        Write-Warning "Failed to retrieve messages for $($user.Mail): $_"
+        continue
     }
 
-    Start-Sleep -Milliseconds 300
-  }
+    foreach ($msg in $messages) {
+        try {
+            $fullMessage = Get-MgUserMessage -UserId $user.Id -MessageId $msg.Id
+            $bodyContent = Remove-HtmlTags $fullMessage.Body.Content
+        } catch {
+            Write-Warning "Failed to retrieve full content for message ID $($msg.Id) in $($user.Mail): $_"
+            continue
+        }
+
+        # Loop through each data type for each message
+        foreach ($type in $sensitiveDataTypes) {
+            $matchInfo = Find-SensitiveDataMatches -text $bodyContent -dataType $type.DataType -keywords $type.Keywords -patterns $type.Patterns
+            
+            if ($matchInfo) {
+                $matchContext = Get-MatchContext -text $bodyContent -pattern $matchInfo.ContextPattern
+                Write-Host "Match found:" $msg.Subject "- Type:" $matchInfo.DataType "- Confidence:" $matchInfo.Confidence -ForegroundColor Green
+
+                $results += [PSCustomObject]@{
+                    Mailbox      = $user.Mail
+                    UserId       = $user.Id
+                    Subject      = $msg.Subject
+                    DataType     = $matchInfo.DataType
+                    Confidence   = $matchInfo.Confidence
+                    From         = $msg.From.EmailAddress.Address
+                    SentDateTime = $msg.SentDateTime
+                    MessageId    = $msg.Id
+                    MatchPreview = $matchContext
+                }
+                # Stop checking this message if a match is found to avoid duplicate entries for the same message
+                break 
+            }
+        }
+        Start-Sleep -Milliseconds 300
+    }
 }
 
-Write-Output "Generating report..."
-$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+# Export to CSV
+$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $csvPath = ".\\Sensitive_Data_Email_Report_$timestamp.csv"
 $results | Export-Csv -Path $csvPath -NoTypeInformation
 Write-Host "Report exported to $csvPath" -ForegroundColor Yellow
