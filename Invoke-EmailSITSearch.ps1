@@ -23,9 +23,6 @@ Data Security Architect
 
 #>
 
-#Set function max to account for outdated powershell versions...graph module can easily reach the default limit
-$MaximumFunctionCount = 9999
-
 # Check if Microsoft.Graph is installed
 if (-not (Get-Module -ListAvailable -Name Microsoft.Graph)) {
     Write-Output "Microsoft.Graph module not found. Installing..."
@@ -59,10 +56,12 @@ $tenantId     = ""
 $clientId     = ""
 $clientSecret = ""
 
+$tenantId     = ""
+$clientId     = ""
+$clientSecret = ""
 $secureClientSecret = ConvertTo-SecureString $clientSecret -AsPlainText -Force
-$clientCredential = New-Object System.Management.Automation.PSCredential($clientId, $secureClientSecret)
-
-Write-Output "Connecting to Graph API..."
+$clientCredential   = New-Object System.Management.Automation.PSCredential($clientId, $secureClientSecret)
+Write-Output "Establishing connection to MS Graph..."
 Connect-MgGraph -TenantId $tenantId -ClientSecretCredential $clientCredential
 
 
@@ -201,7 +200,22 @@ function Find-SensitiveDataMatches {
 # Collect results
 Write-Output "Gathering user mailboxes..."
 $users = Get-MgUser -All | Where-Object { $_.Mail -ne $null }
-$results = @()
+$results=@()
+
+$sensitiveDataTypes = @(
+  @{ DataType='SSN';            Keywords=$ssnKeywords;             Patterns=$ssnPatterns;             Fn='PII' },
+  @{ DataType='Credit Card';    Keywords=$ccnKeywords;             Patterns=$ccnPatterns;             Fn='PII' },
+  @{ DataType='Bank Account';   Keywords=$bankAccountKeywords;     Patterns=$bankAccountPatterns;     Fn='PII' },
+  @{ DataType='GitHub PAT';                 Keywords=$githubPatKeywords;         Patterns=$githubPatPatterns;         Fn='Cred' },
+  @{ DataType='Google API Key';             Keywords=$googleApiKeywords;         Patterns=$googleApiPatterns;         Fn='Cred' },
+  @{ DataType='Slack Token';                Keywords=$slackTokenKeywords;        Patterns=$slackTokenPatterns;        Fn='Cred' },
+  @{ DataType='Azure Storage SAS';          Keywords=$azureSasKeywords;          Patterns=$azureSasPatterns;          Fn='Cred' },
+  @{ DataType='Azure Storage Account Key';  Keywords=$azureStorageKeyKeywords;    Patterns=$azureStorageKeyPatterns;    Fn='Cred' },
+  @{ DataType='JWT Bearer Token';           Keywords=$jwtAuthKeywords;           Patterns=$jwtAuthPatterns;           Fn='Cred' },
+  @{ DataType='Azure SQL Connection String';Keywords=$azureSqlConnKeywords;       Patterns=$azureSqlConnPatterns;       Fn='Cred' },
+  @{ DataType='Generic Client Secret / API Key'; Keywords=$genericSecretKeywords; Patterns=$genericSecretPatterns;      Fn='Cred' },
+  @{ DataType='General Password';           Keywords=$generalPasswordKeywords;   Patterns=$generalPasswordPatterns;    Fn='Cred' }
+)
 
 # Define all the sensitive data types to search for
 $sensitiveDataTypes = @(
