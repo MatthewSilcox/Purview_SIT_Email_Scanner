@@ -1,7 +1,8 @@
 <#
 
 .SYNOPSIS
-- Scans Exchange Online user mailboxes for U.S. Social Security Numbers (SSNs), Credit Card Numbers (CCNs), and U.S. Bank Account Numbers using Microsoft Graph API.
+- Scans Exchange Online user mailboxes for sensitive information including PII and credentials using Microsoft Graph API.
+- Detects: SSN, Credit Cards, Bank Accounts, GitHub PAT, Google API Keys, Slack Tokens, Azure Secrets, JWT Tokens, SQL Connection Strings, Passwords, and more.
 - Applies confidence scoring (High, Medium, Low) based on keyword proximity and regex patterns.
 - Exports matches to CSV for review.
 
@@ -12,10 +13,22 @@ Key Features:
 - Full mailbox scan for multiple sensitive data types using Microsoft Graph (Mail.ReadWrite scope)
 - Regex + contextual keyword scoring to avoid false positives
 - CSV export of matches with subject, sender, timestamp, data type, and confidence level
+- Parallel processing for faster scanning of large environments
+- Pagination support for mailboxes with >1000 messages
+
+.PARAMETER ThrottleLimit
+Maximum number of parallel threads. Default: 5 (recommended for Graph API throttling)
+
+.PARAMETER SleepMilliseconds
+Delay between message processing (in milliseconds). Default: 300
+
+.PARAMETER MaxMessages
+Maximum messages per mailbox. Use 0 for unlimited (with pagination). Default: 0
 
 .NOTES
-- Use in accordance with your organization's legal and compliance policies. 
+- Use in accordance with your organization's legal and compliance policies.
 - Production-use should incorporate access control, logging, and optional automation hardening.
+- Requires PowerShell 7+ for parallel processing features
 
 .AUTHOR
 Matthew Silcox
@@ -25,7 +38,25 @@ Personal fork by author speckles0 notes:
 The core functionality of this script is the same concept, but is now using pre-compiled regex instead of calculating each time in a loop.
 I have also removed the unused and undefined credential data types from this script.
 
+Additional optimizations by Claude Code:
+- Parallel processing for multiple mailboxes simultaneously
+- Fixed double API call (now fetches body in first request)
+- Added pagination support for mailboxes with >1000 messages
+- Configurable throttling and parallel execution limits
+
 #>
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory=$false)]
+    [int]$ThrottleLimit = 5,
+
+    [Parameter(Mandatory=$false)]
+    [int]$SleepMilliseconds = 300,
+
+    [Parameter(Mandatory=$false)]
+    [int]$MaxMessages = 0
+)
 
 
 # ============================================================================
@@ -102,26 +133,154 @@ $bankAccountKeywords = @(
     "bank account", "account number", "routing number", "aba", "checking", "savings", "acct #"
 )
 
+# Credential & Secret Definitions (restored from original implementation)
+$genericSecretKeywords = @(
+    'secret','token','key','credential','password','pw','passwd','authorization','bearer','sas',
+    'subscription','client id','clientid','client secret','connectionstring','userpass'
+)
+
+$githubPatPatterns = @{
+    High   = [regex]'gh[pousr]_[A-Za-z0-9]{36}'
+    Medium = [regex]'gh\w*_[A-Za-z0-9]{20,}'
+    Low    = [regex]'gh\w+_[A-Za-z0-9]+'
+}
+$githubPatKeywords = @('github','pat') + $genericSecretKeywords
+
+$googleApiPatterns = @{
+    High   = [regex]'AIza[0-9A-Za-z\-_]{35}'
+    Medium = [regex]'AIza[0-9A-Za-z\-_]{20,}'
+    Low    = [regex]'AIza[0-9A-Za-z\-_]+'
+}
+$googleApiKeywords = @('google','api') + $genericSecretKeywords
+
+$slackTokenPatterns = @{
+    High   = [regex]'xox[baprs]-[0-9A-Za-z-]{10,48}'
+    Medium = [regex]'xox\w-[0-9A-Za-z-]{8,}'
+    Low    = [regex]'xox\w-'
+}
+$slackTokenKeywords = @('slack') + $genericSecretKeywords
+
+$azureSasPatterns = @{
+    High   = [regex]'sv=\d{4}-\d{2}-\d{2}.*?&sr=[bfqtco].*?&sig=[A-Za-z0-9%+/=]{20,}'
+    Medium = [regex]'sig=[A-Za-z0-9%+/=]{20,}'
+    Low    = [regex]'sv=\d{4}-\d{2}-\d{2}.*sig='
+}
+$azureSasKeywords = @('sas','storage','azure','blob','file','queue','table') + $genericSecretKeywords
+
+$azureStorageKeyPatterns = @{
+    High   = [regex]'(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{86}==(?![A-Za-z0-9+/=])'
+    Medium = [regex]'[A-Za-z0-9+/]{40,}={0,2}'
+    Low    = [regex]'[A-Za-z0-9+/]{20,}'
+}
+$azureStorageKeyKeywords = @('azure','storage','account key') + $genericSecretKeywords
+
+$jwtAuthPatterns = @{
+    High   = [regex]'Authorization:\s*Bearer\s+eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+'
+    Medium = [regex]'eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+'
+    Low    = [regex]'Authorization:\s*Bearer\s+'
+}
+$jwtAuthKeywords = @('authorization','bearer','jwt','token') + $genericSecretKeywords
+
+$azureSqlConnPatterns = @{
+    High   = [regex]'Server=.*\.database\.windows\.net;.*User\s*ID=.*;.*Password=.*;'
+    Medium = [regex]'Server=.*\.database\.windows\.net;.*Password='
+    Low    = [regex]'database\.windows\.net;'
+}
+$azureSqlConnKeywords = @('connection','sql','azure','connstr','connection string','db') + $genericSecretKeywords
+
+$genericSecretPatterns = @{
+    High   = [regex]'(client[_\- ]?secret|api[_\- ]?key|subscription[_\- ]?key)\s*[:=]\s*["'']?[A-Za-z0-9_\-\.]{16,}["'']?'
+    Medium = [regex]'(secret|token|key)\s*[:=]\s*["'']?[A-Za-z0-9_\-\.]{12,}["'']?'
+    Low    = [regex]'(secret|token|key)\s*[:=]\s*["'']'
+}
+
+$generalPasswordKeywords = @(
+    'certutil','curl','powershell','ps1','-u','--env','signtool','winexe','net','rclone',
+    'autologon','ldifde','password','passwd','pw','userpass','connectionstring','key',
+    'credential','token','sas','securestring','sharedaccesskey','accountkey','dapi'
+)
+$generalPasswordPatterns = @{
+    High   = [regex]'(?i)\b(password|passwd|pwd|pw|userpass)\b\s*[:=]\s*["'']?[^\s"'']{8,}["'']?'
+    Medium = [regex]'(?i)\b(PASSWORD|PASS|PWD|SECRET|TOKEN|KEY)[A-Z0-9_\-]*\s*=\s*["'']?[^\s"'']{8,}["'']?'
+    Low    = [regex]'(?i)\b(password|passwd|pwd|pw)\b\s*[:=]\s*[^\s]+'
+}
+
 # Define sensitive data types with pre-compiled keyword patterns
 
 $sensitiveDataTypes = @(
-    @{ 
+    # PII Types
+    @{
         DataType = "SSN"
         Keywords = $ssnKeywords
         Patterns = $ssnPatterns
         KeywordPattern = [regex]('(?i)\b(' + (($ssnKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
     }
-    @{ 
+    @{
         DataType = "Credit Card"
         Keywords = $ccnKeywords
         Patterns = $ccnPatterns
         KeywordPattern = [regex]('(?i)\b(' + (($ccnKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
     }
-    @{ 
+    @{
         DataType = "Bank Account"
         Keywords = $bankAccountKeywords
         Patterns = $bankAccountPatterns
         KeywordPattern = [regex]('(?i)\b(' + (($bankAccountKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
+    }
+    # Credential Types (restored)
+    @{
+        DataType = "GitHub PAT"
+        Keywords = $githubPatKeywords
+        Patterns = $githubPatPatterns
+        KeywordPattern = [regex]('(?i)\b(' + (($githubPatKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
+    }
+    @{
+        DataType = "Google API Key"
+        Keywords = $googleApiKeywords
+        Patterns = $googleApiPatterns
+        KeywordPattern = [regex]('(?i)\b(' + (($googleApiKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
+    }
+    @{
+        DataType = "Slack Token"
+        Keywords = $slackTokenKeywords
+        Patterns = $slackTokenPatterns
+        KeywordPattern = [regex]('(?i)\b(' + (($slackTokenKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
+    }
+    @{
+        DataType = "Azure Storage SAS"
+        Keywords = $azureSasKeywords
+        Patterns = $azureSasPatterns
+        KeywordPattern = [regex]('(?i)\b(' + (($azureSasKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
+    }
+    @{
+        DataType = "Azure Storage Account Key"
+        Keywords = $azureStorageKeyKeywords
+        Patterns = $azureStorageKeyPatterns
+        KeywordPattern = [regex]('(?i)\b(' + (($azureStorageKeyKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
+    }
+    @{
+        DataType = "JWT Bearer Token"
+        Keywords = $jwtAuthKeywords
+        Patterns = $jwtAuthPatterns
+        KeywordPattern = [regex]('(?i)\b(' + (($jwtAuthKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
+    }
+    @{
+        DataType = "Azure SQL Connection String"
+        Keywords = $azureSqlConnKeywords
+        Patterns = $azureSqlConnPatterns
+        KeywordPattern = [regex]('(?i)\b(' + (($azureSqlConnKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
+    }
+    @{
+        DataType = "Generic Client Secret / API Key"
+        Keywords = $genericSecretKeywords
+        Patterns = $genericSecretPatterns
+        KeywordPattern = [regex]('(?i)\b(' + (($genericSecretKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
+    }
+    @{
+        DataType = "General Password"
+        Keywords = $generalPasswordKeywords
+        Patterns = $generalPasswordPatterns
+        KeywordPattern = [regex]('(?i)\b(' + (($generalPasswordKeywords | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\b')
     }
 )
 
@@ -254,58 +413,95 @@ function Find-SensitiveDataMatches {
 }
 
 # ============================================================================
-# MAIN PROCESSING LOGIC
+# MAILBOX PROCESSING FUNCTION
 # ============================================================================
 
-# Filter usertype as Members to exclude guests/B2B by default
+function Process-Mailbox {
+    param(
+        [Parameter(Mandatory=$true)]
+        $User,
 
-Write-Output "Gathering user mailboxes..."
-$users = Get-MgUser -All -Property Mail,Id -Filter "UserType eq 'Member'"| Where-Object { $_.Mail -ne $null }
-$results = [System.Collections.Generic.List[PSCustomObject]]::new()
+        [Parameter(Mandatory=$true)]
+        $SensitiveDataTypes,
 
-$totalUsers = $users.Count
-$currentUser = 0
+        [Parameter(Mandatory=$true)]
+        [int]$SleepMs,
 
-foreach ($user in $users) {
-    $currentUser++
-    Write-Host "[$currentUser/$totalUsers] Scanning mailbox: $($user.Mail)" -ForegroundColor Cyan
-    
+        [Parameter(Mandatory=$true)]
+        [int]$MaxMsgs,
+
+        [Parameter(Mandatory=$true)]
+        [int]$UserNumber,
+
+        [Parameter(Mandatory=$true)]
+        [int]$TotalUsers
+    )
+
+    $userResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    Write-Host "[$UserNumber/$TotalUsers] Scanning mailbox: $($User.Mail)" -ForegroundColor Cyan
+
     try {
-        $messages = Get-MgUserMessage -UserId $user.Id -Top 1000 -Select "id,subject,sentDateTime,from" -ErrorAction Stop
+        # OPTIMIZATION: Fetch body in first request to avoid double API call
+        $allMessages = [System.Collections.Generic.List[object]]::new()
+        $pageSize = if ($MaxMsgs -gt 0 -and $MaxMsgs -lt 1000) { $MaxMsgs } else { 1000 }
+
+        # Initial fetch with body content included
+        $messages = Get-MgUserMessage -UserId $User.Id -Top $pageSize -Select "id,subject,sentDateTime,from,body" -ErrorAction Stop
+
+        if ($messages) {
+            $allMessages.AddRange($messages)
+
+            # PAGINATION: Handle mailboxes with >1000 messages
+            if ($MaxMsgs -eq 0 -or $allMessages.Count -lt $MaxMsgs) {
+                while ($messages -and $messages.'@odata.nextLink') {
+                    Write-Host "  Fetching next page of messages..." -ForegroundColor Gray
+                    $messages = Get-MgUserMessage -UserId $User.Id -Top $pageSize -Select "id,subject,sentDateTime,from,body" -PageLink $messages.'@odata.nextLink' -ErrorAction Stop
+
+                    if ($messages) {
+                        $allMessages.AddRange($messages)
+
+                        # Check if we've hit the max message limit
+                        if ($MaxMsgs -gt 0 -and $allMessages.Count -ge $MaxMsgs) {
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        $messageCount = $allMessages.Count
+        Write-Host "  Processing $messageCount messages..." -ForegroundColor Gray
 
     } catch {
-        Write-Warning "Failed to retrieve messages for $($user.Mail): $_"
-        continue
+        Write-Warning "Failed to retrieve messages for $($User.Mail): $_"
+        return $userResults
     }
 
-    $messageCount = $messages.Count
-    Write-Host "  Processing $messageCount messages..." -ForegroundColor Gray
-
-    foreach ($msg in $messages) {
+    foreach ($msg in $allMessages) {
         try {
-            $fullMessage = Get-MgUserMessage -UserId $user.Id -MessageId $msg.Id -ErrorAction Stop
-            $bodyContent = Remove-HtmlTags $fullMessage.Body.Content
-            $bodyContent.Trim()
-            
+            # Body is already fetched - no second API call needed!
+            $bodyContent = Remove-HtmlTags $msg.Body.Content
+
             # Skip empty messages
             if ([string]::IsNullOrWhiteSpace($bodyContent)) { continue }
-            
+
         } catch {
-            Write-Warning "Failed to retrieve content for message ID $($msg.Id): $_"
+            Write-Warning "Failed to process message ID $($msg.Id): $_"
             continue
         }
 
         # Check each data type
-        foreach ($type in $sensitiveDataTypes) {
+        foreach ($type in $SensitiveDataTypes) {
             $matchInfo = Find-SensitiveDataMatches -text $bodyContent -dataTypeInfo $type
-            
+
             if ($matchInfo) {
                 $matchContext = Get-MatchContext -text $bodyContent -pattern $matchInfo.MatchedPattern
                 Write-Host "  Match found: $($matchInfo.DataType) ($($matchInfo.Confidence)) - $($msg.Subject)" -ForegroundColor Green
 
-                $results.Add([PSCustomObject]@{
-                    Mailbox      = $user.Mail
-                    UserId       = $user.Id
+                $userResults.Add([PSCustomObject]@{
+                    Mailbox      = $User.Mail
+                    UserId       = $User.Id
                     Subject      = $msg.Subject
                     DataType     = $matchInfo.DataType
                     Confidence   = $matchInfo.Confidence
@@ -314,14 +510,95 @@ foreach ($user in $users) {
                     MessageId    = $msg.Id
                     MatchPreview = $matchContext
                 })
-                
+
                 # Stop checking this message to avoid duplicates
-                break 
+                break
             }
         }
-        
+
         # Throttle to respect API limits
-        Start-Sleep -Milliseconds 300
+        if ($SleepMs -gt 0) {
+            Start-Sleep -Milliseconds $SleepMs
+        }
+    }
+
+    return $userResults
+}
+
+# ============================================================================
+# MAIN PROCESSING LOGIC
+# ============================================================================
+
+# Check PowerShell version for parallel support
+$psVersion = $PSVersionTable.PSVersion.Major
+if ($psVersion -lt 7) {
+    Write-Warning "PowerShell 7+ is recommended for parallel processing. Detected version: $psVersion"
+    Write-Warning "Script will run in sequential mode. Consider upgrading to PowerShell 7+ for significant performance improvements."
+    $useParallel = $false
+} else {
+    $useParallel = ($ThrottleLimit -gt 1)
+}
+
+# Filter usertype as Members to exclude guests/B2B by default
+Write-Output "Gathering user mailboxes..."
+$users = Get-MgUser -All -Property Mail,Id -Filter "UserType eq 'Member'" | Where-Object { $_.Mail -ne $null }
+$results = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+$totalUsers = $users.Count
+Write-Output "Found $totalUsers mailboxes to scan"
+Write-Output "Throttle limit: $ThrottleLimit parallel threads"
+Write-Output "Message delay: $SleepMilliseconds ms"
+Write-Output "Max messages per mailbox: $(if ($MaxMessages -eq 0) { 'Unlimited (with pagination)' } else { $MaxMessages })"
+
+if ($useParallel) {
+    Write-Host "`nStarting PARALLEL processing with $ThrottleLimit threads..." -ForegroundColor Green
+
+    # Parallel processing for PowerShell 7+
+    $userResults = $users | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+        $user = $_
+        $currentIndex = $using:users.IndexOf($user) + 1
+
+        # Import the function and variables into parallel scope
+        $sensitiveDataTypes = $using:sensitiveDataTypes
+        $sleepMs = $using:SleepMilliseconds
+        $maxMsgs = $using:MaxMessages
+        $totalUsers = $using:totalUsers
+
+        # Define functions in parallel scope
+        ${function:Remove-HtmlTags} = $using:Function:Remove-HtmlTags
+        ${function:Get-MatchContext} = $using:Function:Get-MatchContext
+        ${function:Find-SensitiveDataMatches} = $using:Function:Find-SensitiveDataMatches
+        ${function:Process-Mailbox} = $using:Function:Process-Mailbox
+
+        # Process the mailbox
+        $mailboxResults = Process-Mailbox -User $user -SensitiveDataTypes $sensitiveDataTypes `
+            -SleepMs $sleepMs -MaxMsgs $maxMsgs -UserNumber $currentIndex -TotalUsers $totalUsers
+
+        # Return results
+        return $mailboxResults
+    }
+
+    # Collect results from parallel execution
+    foreach ($mailboxResults in $userResults) {
+        if ($mailboxResults -and $mailboxResults.Count -gt 0) {
+            $results.AddRange($mailboxResults)
+        }
+    }
+
+} else {
+    Write-Host "`nStarting SEQUENTIAL processing..." -ForegroundColor Yellow
+
+    # Sequential processing (fallback for PS 5.1 or ThrottleLimit=1)
+    $currentUser = 0
+    foreach ($user in $users) {
+        $currentUser++
+
+        $mailboxResults = Process-Mailbox -User $user -SensitiveDataTypes $sensitiveDataTypes `
+            -SleepMs $SleepMilliseconds -MaxMsgs $MaxMessages -UserNumber $currentUser -TotalUsers $totalUsers
+
+        if ($mailboxResults -and $mailboxResults.Count -gt 0) {
+            $results.AddRange($mailboxResults)
+        }
     }
 }
 
