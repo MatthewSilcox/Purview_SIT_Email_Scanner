@@ -63,25 +63,34 @@ param(
 # SETUP
 # ============================================================================
 
-if (-not (Get-Module -ListAvailable -Name Microsoft.Graph)) {
-    Write-Output "Microsoft.Graph module not found. Installing..."
-    try {
-        Install-Module Microsoft.Graph -Scope CurrentUser -Force -ErrorAction Stop
-        Write-Output "Microsoft.Graph module installed successfully."
-    } catch {
-        Write-Error "Failed to install Microsoft.Graph module: $_"
-        exit
-    }
-}
+# Only import the specific Graph modules we need to avoid function capacity issues
+$requiredModules = @(
+    'Microsoft.Graph.Authentication',
+    'Microsoft.Graph.Users',
+    'Microsoft.Graph.Mail'
+)
 
-if (-not (Get-Module -Name Microsoft.Graph)) {
-    try {
-        Write-Output "Importing Microsoft.Graph module..."
-        Import-Module Microsoft.Graph -ErrorAction Stop
-        Write-Output "Microsoft.Graph module imported successfully."
-    } catch {
-        Write-Error "Failed to import Microsoft.Graph module: $_"
-        exit
+foreach ($moduleName in $requiredModules) {
+    if (-not (Get-Module -ListAvailable -Name $moduleName)) {
+        Write-Output "$moduleName module not found. Installing..."
+        try {
+            Install-Module $moduleName -Scope CurrentUser -Force -ErrorAction Stop
+            Write-Output "$moduleName module installed successfully."
+        } catch {
+            Write-Error "Failed to install $moduleName module: $_"
+            exit
+        }
+    }
+
+    if (-not (Get-Module -Name $moduleName)) {
+        try {
+            Write-Output "Importing $moduleName module..."
+            Import-Module $moduleName -ErrorAction Stop
+            Write-Output "$moduleName module imported successfully."
+        } catch {
+            Write-Error "Failed to import $moduleName module: $_"
+            exit
+        }
     }
 }
 
