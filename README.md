@@ -13,12 +13,7 @@ This PowerShell script scans Exchange Online user mailboxes for sensitive inform
 
 ## Requirements
 - PowerShell 7+
-- Microsoft.Graph PowerShell module
-
-```powershell
-Install-Module Microsoft.Graph -Scope CurrentUser -Force
-```
-
+  
 ## App Registration Setup (Microsoft Entra ID)
 1. Sign into Azure Portal: https://portal.azure.com
 2. Go to **Microsoft Entra ID > App registrations** > **New registration**
@@ -65,4 +60,5 @@ Invoke-EmailSSNDeletion -ReviewedCsvPath '.\SSN_Email_Report_20250418-113000.csv
 
 ---
 Use responsibly, WITH EXTREME CAUTION, and only within environments where you are authorized to perform mailbox searches and deletions. Align with legal and compliance requirements at all times.
+
 
