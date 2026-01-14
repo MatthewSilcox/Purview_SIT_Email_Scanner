@@ -554,9 +554,11 @@ if ($useParallel) {
     Write-Host "`nStarting PARALLEL processing with $ThrottleLimit threads..." -ForegroundColor Green
 
     # Parallel processing for PowerShell 7+
+    $i = 0
     $userResults = $users | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
         $user = $_
-        $currentIndex = $using:users.IndexOf($user) + 1
+        $currentIndex = $using:i
+        $null = [System.Threading.Interlocked]::Increment([ref]$using:i)
 
         # Import the function and variables into parallel scope
         $sensitiveDataTypes = $using:sensitiveDataTypes
@@ -564,11 +566,17 @@ if ($useParallel) {
         $maxMsgs = $using:MaxMessages
         $totalUsers = $using:totalUsers
 
-        # Define functions in parallel scope
-        ${function:Remove-HtmlTags} = $using:Function:Remove-HtmlTags
-        ${function:Get-MatchContext} = $using:Function:Get-MatchContext
-        ${function:Find-SensitiveDataMatches} = $using:Function:Find-SensitiveDataMatches
-        ${function:Process-Mailbox} = $using:Function:Process-Mailbox
+        # Define functions in parallel scope using scriptblock
+        $removeHtmlTagsFunc = $using:Function:Remove-HtmlTags
+        $getMatchContextFunc = $using:Function:Get-MatchContext
+        $findSensitiveDataMatchesFunc = $using:Function:Find-SensitiveDataMatches
+        $processMailboxFunc = $using:Function:Process-Mailbox
+
+        # Create function definitions
+        New-Item -Path Function: -Name Remove-HtmlTags -Value $removeHtmlTagsFunc -Force | Out-Null
+        New-Item -Path Function: -Name Get-MatchContext -Value $getMatchContextFunc -Force | Out-Null
+        New-Item -Path Function: -Name Find-SensitiveDataMatches -Value $findSensitiveDataMatchesFunc -Force | Out-Null
+        New-Item -Path Function: -Name Process-Mailbox -Value $processMailboxFunc -Force | Out-Null
 
         # Process the mailbox
         $mailboxResults = Process-Mailbox -User $user -SensitiveDataTypes $sensitiveDataTypes `
