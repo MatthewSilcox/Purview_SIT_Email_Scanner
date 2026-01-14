@@ -63,9 +63,22 @@ param(
 # SETUP
 # ============================================================================
 
-# Note: We don't manually import Microsoft.Graph modules to avoid function capacity errors.
-# Connect-MgGraph will automatically load required modules (Authentication, Users, Mail) as needed.
-# If you need to install the Graph SDK, run: Install-Module Microsoft.Graph -Scope CurrentUser
+# Check if Microsoft Graph SDK is installed (without importing to avoid function capacity errors)
+if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
+    Write-Output "Microsoft Graph SDK not found. Installing..."
+    try {
+        # Install the main SDK package which includes Authentication, Users, and Mail submodules
+        Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+        Write-Output "Microsoft Graph SDK installed successfully."
+    } catch {
+        Write-Error "Failed to install Microsoft Graph SDK: $_"
+        Write-Error "Please run manually: Install-Module Microsoft.Graph -Scope CurrentUser"
+        exit 1
+    }
+}
+
+# Note: We don't manually import modules here to avoid function capacity errors.
+# Connect-MgGraph will automatically load required modules as needed.
 
 # ============================================================================
 # AUTHENTICATION
