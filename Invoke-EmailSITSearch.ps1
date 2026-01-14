@@ -582,8 +582,15 @@ if ($useParallel) {
 
     # Collect results from parallel execution
     foreach ($mailboxResults in $userResults) {
-        if ($mailboxResults -and $mailboxResults.Count -gt 0) {
-            $results.AddRange($mailboxResults)
+        if ($mailboxResults) {
+            # Handle both single objects and collections
+            if ($mailboxResults -is [System.Collections.IEnumerable] -and $mailboxResults -isnot [string]) {
+                foreach ($result in $mailboxResults) {
+                    $results.Add($result)
+                }
+            } else {
+                $results.Add($mailboxResults)
+            }
         }
     }
 
@@ -598,8 +605,10 @@ if ($useParallel) {
         $mailboxResults = Process-Mailbox -User $user -SensitiveDataTypes $sensitiveDataTypes `
             -SleepMs $SleepMilliseconds -MaxMsgs $MaxMessages -UserNumber $currentUser -TotalUsers $totalUsers
 
-        if ($mailboxResults -and $mailboxResults.Count -gt 0) {
-            $results.AddRange($mailboxResults)
+        if ($mailboxResults) {
+            foreach ($result in $mailboxResults) {
+                $results.Add($result)
+            }
         }
     }
 }
