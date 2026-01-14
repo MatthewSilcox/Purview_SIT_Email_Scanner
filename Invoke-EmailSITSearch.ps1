@@ -553,6 +553,12 @@ Write-Output "Max messages per mailbox: $(if ($MaxMessages -eq 0) { 'Unlimited (
 if ($useParallel) {
     Write-Host "`nStarting PARALLEL processing with $ThrottleLimit threads..." -ForegroundColor Green
 
+    # Capture functions as scriptblocks before parallel execution
+    $removeHtmlTagsFunc = ${function:Remove-HtmlTags}
+    $getMatchContextFunc = ${function:Get-MatchContext}
+    $findSensitiveDataMatchesFunc = ${function:Find-SensitiveDataMatches}
+    $processMailboxFunc = ${function:Process-Mailbox}
+
     # Parallel processing for PowerShell 7+
     $i = 0
     $userResults = $users | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
@@ -566,17 +572,11 @@ if ($useParallel) {
         $maxMsgs = $using:MaxMessages
         $totalUsers = $using:totalUsers
 
-        # Define functions in parallel scope using scriptblock
-        $removeHtmlTagsFunc = $using:Function:Remove-HtmlTags
-        $getMatchContextFunc = $using:Function:Get-MatchContext
-        $findSensitiveDataMatchesFunc = $using:Function:Find-SensitiveDataMatches
-        $processMailboxFunc = $using:Function:Process-Mailbox
-
-        # Create function definitions
-        New-Item -Path Function: -Name Remove-HtmlTags -Value $removeHtmlTagsFunc -Force | Out-Null
-        New-Item -Path Function: -Name Get-MatchContext -Value $getMatchContextFunc -Force | Out-Null
-        New-Item -Path Function: -Name Find-SensitiveDataMatches -Value $findSensitiveDataMatchesFunc -Force | Out-Null
-        New-Item -Path Function: -Name Process-Mailbox -Value $processMailboxFunc -Force | Out-Null
+        # Create function definitions from captured scriptblocks
+        New-Item -Path Function: -Name Remove-HtmlTags -Value $using:removeHtmlTagsFunc -Force | Out-Null
+        New-Item -Path Function: -Name Get-MatchContext -Value $using:getMatchContextFunc -Force | Out-Null
+        New-Item -Path Function: -Name Find-SensitiveDataMatches -Value $using:findSensitiveDataMatchesFunc -Force | Out-Null
+        New-Item -Path Function: -Name Process-Mailbox -Value $using:processMailboxFunc -Force | Out-Null
 
         # Process the mailbox
         $mailboxResults = Process-Mailbox -User $user -SensitiveDataTypes $sensitiveDataTypes `
