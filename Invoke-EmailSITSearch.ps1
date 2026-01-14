@@ -63,11 +63,13 @@ param(
 # SETUP
 # ============================================================================
 
-# Check if Microsoft Graph SDK is installed (without importing to avoid function capacity errors)
+# Increase function capacity to handle Microsoft Graph SDK (has 6000+ functions)
+$MaximumFunctionCount = 8192
+
+# Check if Microsoft Graph SDK is installed
 if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
     Write-Output "Microsoft Graph SDK not found. Installing..."
     try {
-        # Install the main SDK package which includes Authentication, Users, and Mail submodules
         Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
         Write-Output "Microsoft Graph SDK installed successfully."
     } catch {
@@ -76,9 +78,6 @@ if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
         exit 1
     }
 }
-
-# Note: We don't manually import modules here to avoid function capacity errors.
-# Connect-MgGraph will automatically load required modules as needed.
 
 # ============================================================================
 # AUTHENTICATION
