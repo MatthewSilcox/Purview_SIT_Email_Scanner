@@ -38,11 +38,12 @@ Personal fork by author speckles0 notes:
 The core functionality of this script is the same concept, but is now using pre-compiled regex instead of calculating each time in a loop.
 I have also removed the unused and undefined credential data types from this script.
 
-Additional optimizations by Claude Code:
+Additional optimizations:
 - Parallel processing for multiple mailboxes simultaneously
 - Fixed double API call (now fetches body in first request)
 - Added pagination support for mailboxes with >1000 messages
 - Configurable throttling and parallel execution limits
+- Restored credential scanning functionality (GitHub PAT, Google API, Slack, Azure, JWT, SQL, etc.)
 
 #>
 
