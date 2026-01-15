@@ -620,11 +620,521 @@ if ($useParallel) {
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $csvPath = ".\Sensitive_Data_Email_Report_$timestamp.csv"
+$htmlPath = ".\Sensitive_Data_Email_Report_$timestamp.html"
 
 if ($results.Count -gt 0) {
+    # Export CSV
     $results | Export-Csv -Path $csvPath -NoTypeInformation
-    Write-Host "`nReport exported to $csvPath" -ForegroundColor Yellow
+    Write-Host "`nCSV report exported to $csvPath" -ForegroundColor Yellow
+
+    # Generate statistics for HTML report
+    $stats = @{
+        Total = $results.Count
+        High = ($results | Where-Object { $_.Confidence -eq 'High' }).Count
+        Medium = ($results | Where-Object { $_.Confidence -eq 'Medium' }).Count
+        Low = ($results | Where-Object { $_.Confidence -eq 'Low' }).Count
+        ByType = $results | Group-Object DataType | Sort-Object Count -Descending
+        ByMailbox = $results | Group-Object Mailbox | Sort-Object Count -Descending | Select-Object -First 10
+        ScanDate = Get-Date -Format "MMMM dd, yyyy 'at' h:mm tt"
+        TotalMailboxes = $totalUsers
+        ScannedMessages = ($results | Select-Object -Unique MessageId).Count
+    }
+
+    # Generate HTML Report
+    $html = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIT Scanner Report - $($stats.ScanDate)</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header .subtitle {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            padding: 40px;
+            background: #f8f9fa;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+
+        .stat-card .number {
+            font-size: 3em;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+
+        .stat-card .label {
+            color: #6c757d;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-high .number { color: #dc3545; }
+        .stat-medium .number { color: #fd7e14; }
+        .stat-low .number { color: #6c757d; }
+        .stat-total .number { color: #667eea; }
+
+        .controls {
+            padding: 30px 40px;
+            background: white;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .search-box {
+            flex: 1;
+            min-width: 250px;
+            padding: 12px 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.2s;
+        }
+
+        .search-box:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .filter-select {
+            padding: 12px 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 16px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .table-container {
+            padding: 0 40px 40px 40px;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+        }
+
+        thead {
+            background: #f8f9fa;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        th {
+            padding: 16px;
+            text-align: left;
+            font-weight: 600;
+            color: #495057;
+            border-bottom: 2px solid #dee2e6;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.2s;
+        }
+
+        th:hover {
+            background: #e9ecef;
+        }
+
+        th::after {
+            content: ' ⇅';
+            opacity: 0.3;
+            font-size: 0.8em;
+        }
+
+        td {
+            padding: 16px;
+            border-bottom: 1px solid #f1f3f5;
+        }
+
+        tbody tr {
+            transition: background 0.2s;
+        }
+
+        tbody tr:hover {
+            background: #f8f9fa;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-high {
+            background: #ffe5e5;
+            color: #dc3545;
+        }
+
+        .badge-medium {
+            background: #fff4e5;
+            color: #fd7e14;
+        }
+
+        .badge-low {
+            background: #f1f3f5;
+            color: #6c757d;
+        }
+
+        .expandable {
+            cursor: pointer;
+        }
+
+        .expand-icon {
+            display: inline-block;
+            margin-right: 8px;
+            transition: transform 0.2s;
+        }
+
+        .expand-icon.expanded {
+            transform: rotate(90deg);
+        }
+
+        .context-row {
+            display: none;
+            background: #f8f9fa;
+        }
+
+        .context-row.visible {
+            display: table-row;
+        }
+
+        .context-content {
+            padding: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            margin: 10px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .top-offenders {
+            padding: 0 40px 40px 40px;
+        }
+
+        .top-offenders h2 {
+            margin-bottom: 20px;
+            color: #343a40;
+        }
+
+        .offender-item {
+            background: white;
+            padding: 16px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .offender-email {
+            font-weight: 600;
+            color: #343a40;
+        }
+
+        .offender-count {
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6c757d;
+            font-size: 1.2em;
+        }
+
+        @media print {
+            body { background: white; padding: 0; }
+            .container { box-shadow: none; }
+            .controls { display: none; }
+            .context-row { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Exchange Online SIT Scanner</h1>
+            <div class="subtitle">Scan Report - $($stats.ScanDate)</div>
+        </div>
+
+        <div class="dashboard">
+            <div class="stat-card stat-total">
+                <div class="label">Total Findings</div>
+                <div class="number">$($stats.Total)</div>
+            </div>
+            <div class="stat-card stat-high">
+                <div class="label">High Confidence</div>
+                <div class="number">$($stats.High)</div>
+            </div>
+            <div class="stat-card stat-medium">
+                <div class="label">Medium Confidence</div>
+                <div class="number">$($stats.Medium)</div>
+            </div>
+            <div class="stat-card stat-low">
+                <div class="label">Low Confidence</div>
+                <div class="number">$($stats.Low)</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <input type="text" id="searchBox" class="search-box" placeholder="🔍 Search mailbox, subject, or data type...">
+            <select id="confidenceFilter" class="filter-select">
+                <option value="">All Confidence Levels</option>
+                <option value="High">High</option>
+                <option value="Medium">Medium</option>
+                <option value="Low">Low</option>
+            </select>
+            <select id="typeFilter" class="filter-select">
+                <option value="">All Data Types</option>
+"@
+
+    foreach ($type in ($stats.ByType | Select-Object -ExpandProperty Name)) {
+        $html += "                <option value=`"$type`">$type</option>`n"
+    }
+
+    $html += @"
+            </select>
+            <a href="$csvPath" class="btn btn-primary" download>📥 Download CSV</a>
+            <button onclick="window.print()" class="btn btn-primary">🖨️ Print</button>
+        </div>
+
+        <div class="table-container">
+            <table id="resultsTable">
+                <thead>
+                    <tr>
+                        <th onclick="sortTable(0)">Mailbox</th>
+                        <th onclick="sortTable(1)">Data Type</th>
+                        <th onclick="sortTable(2)">Confidence</th>
+                        <th onclick="sortTable(3)">Subject</th>
+                        <th onclick="sortTable(4)">From</th>
+                        <th onclick="sortTable(5)">Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+"@
+
+    $rowId = 0
+    foreach ($result in $results) {
+        $rowId++
+        $confidenceBadge = "badge-$($result.Confidence.ToLower())"
+        $contextPreview = [System.Security.SecurityElement]::Escape($result.MatchPreview)
+        $formattedDate = ([DateTime]$result.SentDateTime).ToString("MMM dd, yyyy h:mm tt")
+
+        $html += @"
+                    <tr class="data-row" data-confidence="$($result.Confidence)" data-type="$($result.DataType)">
+                        <td class="expandable" onclick="toggleContext($rowId)">
+                            <span class="expand-icon" id="icon-$rowId">▶</span>
+                            $($result.Mailbox)
+                        </td>
+                        <td>$($result.DataType)</td>
+                        <td><span class="badge $confidenceBadge">$($result.Confidence)</span></td>
+                        <td>$($result.Subject)</td>
+                        <td>$($result.From)</td>
+                        <td>$formattedDate</td>
+                    </tr>
+                    <tr class="context-row" id="context-$rowId">
+                        <td colspan="6">
+                            <div class="context-content">$contextPreview</div>
+                        </td>
+                    </tr>
+"@
+    }
+
+    $html += @"
+                </tbody>
+            </table>
+            <div id="noResults" class="no-results" style="display: none;">
+                No results match your search criteria.
+            </div>
+        </div>
+
+        <div class="top-offenders">
+            <h2>📊 Top 10 Mailboxes by Findings</h2>
+"@
+
+    foreach ($mailbox in $stats.ByMailbox) {
+        $html += @"
+            <div class="offender-item">
+                <span class="offender-email">$($mailbox.Name)</span>
+                <span class="offender-count">$($mailbox.Count)</span>
+            </div>
+"@
+    }
+
+    $html += @"
+        </div>
+    </div>
+
+    <script>
+        // Toggle context visibility
+        function toggleContext(rowId) {
+            const contextRow = document.getElementById('context-' + rowId);
+            const icon = document.getElementById('icon-' + rowId);
+
+            contextRow.classList.toggle('visible');
+            icon.classList.toggle('expanded');
+        }
+
+        // Filter functionality
+        const searchBox = document.getElementById('searchBox');
+        const confidenceFilter = document.getElementById('confidenceFilter');
+        const typeFilter = document.getElementById('typeFilter');
+        const table = document.getElementById('resultsTable');
+        const noResults = document.getElementById('noResults');
+
+        function filterTable() {
+            const searchTerm = searchBox.value.toLowerCase();
+            const confidenceValue = confidenceFilter.value;
+            const typeValue = typeFilter.value;
+
+            const rows = table.querySelectorAll('.data-row');
+            let visibleCount = 0;
+
+            rows.forEach((row, index) => {
+                const confidence = row.dataset.confidence;
+                const type = row.dataset.type;
+                const text = row.textContent.toLowerCase();
+                const contextRow = document.getElementById('context-' + (index + 1));
+
+                const matchesSearch = searchTerm === '' || text.includes(searchTerm);
+                const matchesConfidence = confidenceValue === '' || confidence === confidenceValue;
+                const matchesType = typeValue === '' || type === typeValue;
+
+                if (matchesSearch && matchesConfidence && matchesType) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                    if (contextRow) contextRow.classList.remove('visible');
+                }
+            });
+
+            noResults.style.display = visibleCount === 0 ? 'block' : 'none';
+            table.style.display = visibleCount === 0 ? 'none' : 'table';
+        }
+
+        searchBox.addEventListener('input', filterTable);
+        confidenceFilter.addEventListener('change', filterTable);
+        typeFilter.addEventListener('change', filterTable);
+
+        // Table sorting
+        function sortTable(columnIndex) {
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(table.querySelectorAll('.data-row'));
+
+            rows.sort((a, b) => {
+                const aText = a.cells[columnIndex].textContent.trim();
+                const bText = b.cells[columnIndex].textContent.trim();
+                return aText.localeCompare(bText);
+            });
+
+            rows.forEach(row => {
+                const rowIndex = row.rowIndex;
+                tbody.appendChild(row);
+                const contextRow = document.getElementById('context-' + ((rowIndex + 1) / 2));
+                if (contextRow) tbody.appendChild(contextRow);
+            });
+        }
+    </script>
+</body>
+</html>
+"@
+
+    # Write HTML file
+    $html | Out-File -FilePath $htmlPath -Encoding UTF8
+
+    Write-Host "HTML report exported to $htmlPath" -ForegroundColor Green
     Write-Host "Total matches found: $($results.Count)" -ForegroundColor Green
+    Write-Host "`nOpen the HTML file in your browser for an interactive report!" -ForegroundColor Cyan
 } else {
     Write-Host "`nNo sensitive data matches found." -ForegroundColor Yellow
 }
